@@ -1,14 +1,29 @@
 <resources>
-    <string name="app_name" translatable="false">gptAssist</string>
-    <string name="error_microsoft_google">Login via Google, Apple, or Microsoft account is not supported</string>
+    <string name="app_name" translatable="false">claudeAssist</string>
+    <string name="error_microsoft_google">Login via Google, Apple, or Microsoft is blocked in restricted mode. Tap the hand to switch to unrestricted, or use e-mail login.</string>
     <string name="error_copy">Please select and copy text manually</string>
-    <!-- StarDialog -->
-    <string name="dialog_OK_button">OK</string>
-    <string name="dialog_NO_button">No</string>
-    <string name="dialog_Later_button">Maybe later</string>
-    <string name="dialog_StarOnGitHub">Do you like this app? Please give a star on GitHub or buy the developer a coffee via PayPal.</string>
     <string name="download">Download started:</string>
     <string name="all_urls">All URLs allowed</string>
     <string name="urls_restricted">URLs restricted</string>
     <string name="url_copied">URL copied</string>
+    <!-- Accounts -->
+    <string name="accounts_title">Accounts (hold to manage)</string>
+    <string name="add_account">Add account</string>
+    <string name="add">Add</string>
+    <string name="account_default_name">Account %d</string>
+    <string name="restricted_tag">restricted</string>
+    <string name="switched_to">Account: %s</string>
+    <string name="rename">Rename</string>
+    <string name="sign_out_clear">Sign out and clear data</string>
+    <string name="delete_account">Delete account</string>
+    <string name="delete_confirm">Delete \"%s\" and all its cookies and data?</string>
+    <string name="account_cleared">%s: signed out, data cleared</string>
+    <string name="cannot_delete_last">The last account cannot be deleted</string>
+    <!-- Background -->
+    <string name="bg_channel">Background activity</string>
+    <string name="bg_running">Keeping chats running in the background</string>
+    <string name="bg_on">Background: on</string>
+    <string name="bg_off">Background: off</string>
+    <string name="bg_enabled">Background running enabled</string>
+    <string name="bg_disabled">Background running disabled</string>
 </resources>

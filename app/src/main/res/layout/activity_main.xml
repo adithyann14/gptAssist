@@ -5,8 +5,9 @@
     android:layout_height="match_parent"
     android:fitsSystemWindows="true">
 
-    <WebView
-        android:id="@+id/chatWebView"
+    <!-- The WebView is created in code so it can be re-created per account/profile -->
+    <FrameLayout
+        android:id="@+id/webContainer"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
@@ -16,6 +17,6 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_alignParentEnd="true"
-        android:src="@drawable/restricted" />
+        android:src="@drawable/unrestricted" />
 
 </RelativeLayout>

@@ -1,6 +1,8 @@
-gptAssist is a simple WebView wrapper for ChatGPT. It blocks all URLs that are not essential for functioning.
-It does not support login via Apple, Microsoft, or Google account.
-Please use a web browser for initial sign up.
+claudeAssist is a simple WebView wrapper for Claude (claude.ai).
 
-You can switch on/off blocking by clicking the button at the top right.
+- Multiple accounts, each with its own separate cookies and site data
+- Unrestricted by default; each account can be switched to restricted mode, which blocks all URLs not essential for functioning
+
+Tap the hand icon at the top right to toggle restricted / unrestricted.
+Long press the hand icon to switch, add, rename or delete accounts.
 Swipe up a bit to hide the button.

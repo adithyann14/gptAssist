@@ -1,69 +1,37 @@
- ```
-Google has announced that, starting in 2026/2027, all apps on certified Android devices
-will require the developer to submit personal identity details directly to Google.
-Since the developers of this app do not agree to this requirement, this app will no longer 
-work on certified Android devices after that time.
-```
+# claudeAssist
 
-<pre>Send a coffee to 
-woheller69@t-online.de 
-<a href= "https://www.paypal.com/signin"><img  align="left" src="https://www.paypalobjects.com/webstatic/de_DE/i/de-pp-logo-150px.png"></a>
+A simple WebView wrapper for [Claude](https://claude.ai), converted from
+[gptAssist](https://github.com/woheller69/gptassist) (GPLv3).
 
-  
-Or via this link (with fees)
-<a href="https://www.paypal.com/donate?hosted_button_id=XVXQ54LBLZ4AA"><img  align="left" src="https://img.shields.io/badge/Donate%20with%20Debit%20or%20Credit%20Card-002991?style=plastic"></a></pre>
+- **Multiple accounts** with fully separate cookies and site data
+- **Unrestricted by default** (Google / Apple / Microsoft sign-in works). Each account can be set to
+  **restricted**, which blocks every URL that is not essential (claude.ai, claude.com, anthropic.com, Cloudflare check)
+- File upload, voice input, downloads
+- **Background running**: a foreground service (notification) keeps the app alive so replies finish while you switch apps. Toggle it in the long-press account dialog ("Background: on/off")
 
+## Usage
 
-| **RadarWeather** | **Gas Prices** | **Smart Eggtimer** |
-|:---:|:---:|:---:|
-| [<img src="https://github.com/woheller69/weather/blob/main/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.weather/) | [<img src="https://github.com/woheller69/spritpreise/blob/main/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.spritpreise/) | [<img src="https://github.com/woheller69/eggtimer/blob/main/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.eggtimer/) |
-| **Bubble** | **hEARtest** | **GPS Cockpit** |
-| [<img src="https://github.com/woheller69/Level/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.level/) | [<img src="https://github.com/woheller69/audiometry/blob/new/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.audiometry/) | [<img src="https://github.com/woheller69/gpscockpit/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.gpscockpit/) |
-| **Audio Analyzer** | **LavSeeker** | **TimeLapseCam** |
-| [<img src="https://github.com/woheller69/audio-analyzer-for-android/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.audio_analyzer_for_android/) |[<img src="https://github.com/woheller69/lavatories/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.lavatories/) | [<img src="https://github.com/woheller69/TimeLapseCamera/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.TimeLapseCam/) |
-| **Arity** | **Cirrus** | **solXpect** |
-| [<img src="https://github.com/woheller69/arity/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.arity/) | [<img src="https://github.com/woheller69/omweather/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.omweather/) | [<img src="https://github.com/woheller69/solXpect/blob/main/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.solxpect/) |
-| **gptAssist** | **dumpSeeker** | **huggingAssist** |
-| [<img src="https://github.com/woheller69/gptassist/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.gptassist/) | [<img src="https://github.com/woheller69/dumpseeker/blob/main/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.dumpseeker/) | [<img src="https://github.com/woheller69/huggingassist/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.hugassist/) |
-| **FREE Browser** | **whoBIRD** | **PeakOrama** |
-| [<img src="https://github.com/woheller69/browser/blob/newmaster/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.browser/) | [<img src="https://github.com/woheller69/whoBIRD/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.whobird/) | [<img src="https://github.com/woheller69/PeakOrama/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.PeakOrama/) |
-| **Whisper** | **Seamless** | **SherpaTTS** |
-| [<img src="https://github.com/woheller69/whisperIME/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.whisper/) | [<img src="https://github.com/woheller69/seamless/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.seemless/) | [<img src="https://github.com/woheller69/ttsengine/blob/master/fastlane/metadata/android/en-US/images/icon.png" width="50">](https://f-droid.org/packages/org.woheller69.ttsengine/) |
+| Gesture | Action |
+|---|---|
+| Tap the hand icon (top right) | Toggle restricted / unrestricted for the current account |
+| **Long press** the hand icon | Account list: tap to switch, **Add account**, long press an entry to rename / sign out / delete |
+| Swipe up | Hide the hand icon (swipe down at top of page to show it again) |
 
-# gptAssist
+The restriction setting is remembered per account.
 
-gptAssist is a simple WebView wrapper for ChatGPT. It blocks all URLs which are not essential.
-It does not support login via Apple, Microsoft or Google account.
-Please use a web browser for initial sign up.
+### How accounts are separated
+- On a system WebView with multi-profile support (WebView 126+), every account gets its own WebView
+  *profile*: cookies, localStorage, cache and IndexedDB are fully isolated.
+- On older WebViews, the app falls back to swapping the cookies of claude.ai / claude.com / anthropic.com
+  and wiping site storage on every switch. Sessions stay separate, but this is less strict.
 
-- 🔒 **Privacy-focused**: Blocks unnecessary URLs and tracking
-- 🎯 **Focused interface**: Clean chat experience without browser distractions  
-- 🔄 **Toggle blocking**: Switch between restricted and unrestricted modes
-- 📁 **File support**: Upload files for analysis and conversation
-- 🎤 **Voice input**: Support for voice conversations
-- 📱 **Lightweight**: Minimal app focused on core functionality
+### E-mail sign-in links
+The app registers `https://claude.ai/magic-link`. On Android 12+ enable
+*Settings → Apps → claudeAssist → Open by default → Add link* so the link opens in the app
+(it loads in the currently active account).
 
-You can switch on/off blocking by clicking the button at the top right.
-Swipe up a bit to hide the button.
-
-[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
-alt="Get it on F-Droid"
-height="80">](https://f-droid.org/packages/org.woheller69.gptassist/)
+## Build
+`./gradlew assembleDebug` (needs the Android SDK; FreeDroidWarn is fetched from JitPack).
 
 ## License
-
-This app is licensed under the GPLv3.
-
-The app uses:
-- Parts from GMaps WV (https://gitlab.com/divested-mobile/maps) which is licensed under the GPLv3
-
-## Contributing
-
-If you find a bug, please open an issue in the Github repository, assuming one does not already exist.
-- Clearly describe the issue including steps to reproduce when it is a bug. In some cases screenshots can be supportive.
-- Make sure you mention the Android version and the device you have used when you encountered the issue.
-- Make your description as precise as possible.
-
-If you know the solution to a bug please report it in the corresponding issue and if possible modify the code and create a pull request.
-
-
+GPLv3, same as the original. Parts from GMaps WV (https://gitlab.com/divested-mobile/maps), GPLv3.
