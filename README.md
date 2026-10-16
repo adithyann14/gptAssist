@@ -19,6 +19,17 @@ A simple WebView wrapper for [Claude](https://claude.ai), converted from
 
 The restriction setting is remembered per account.
 
+### Backup and restore
+Long press the hand icon → **More…** → *Backup all data* / *Restore from backup*.
+A backup holds all accounts (names, restricted flag) and their login cookies, optionally encrypted with a
+passphrase (AES-256-GCM, PBKDF2). Restoring **replaces** all current accounts. Chat history lives on Claude's
+servers; local site storage (localStorage etc.) is not part of a backup, so the web app may need a moment to re-sync.
+Treat an unencrypted backup like a password: anyone with the file can use the sessions.
+
+### Downloads
+Files go to the Downloads folder. `blob:` / `data:` links (what Claude uses for generated files) are handled in-app;
+normal links use the system DownloadManager with a built-in fallback.
+
 ### How accounts are separated
 - On a system WebView with multi-profile support (WebView 126+), every account gets its own WebView
   *profile*: cookies, localStorage, cache and IndexedDB are fully isolated.

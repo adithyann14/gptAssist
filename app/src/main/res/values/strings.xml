@@ -26,4 +26,26 @@
     <string name="bg_off">Background: off</string>
     <string name="bg_enabled">Background running enabled</string>
     <string name="bg_disabled">Background running disabled</string>
+    <!-- Downloads -->
+    <string name="download_saved">Saved to Downloads:\n%s</string>
+    <string name="download_failed">Download failed</string>
+    <string name="download_unsupported">This kind of link cannot be downloaded</string>
+    <string name="download_need_storage">Storage permission is needed to save the file</string>
+    <!-- Backup / restore -->
+    <string name="more">More…</string>
+    <string name="backup_all">Backup all data</string>
+    <string name="restore_backup">Restore from backup</string>
+    <string name="backup_title">Backup all accounts</string>
+    <string name="backup_pass_msg">Choose a passphrase to encrypt the backup. It contains your login sessions, so leaving it empty stores them unencrypted.</string>
+    <string name="restore_pass_title">Encrypted backup</string>
+    <string name="restore_pass_msg">Enter the passphrase used for this backup.</string>
+    <string name="passphrase_hint">Passphrase</string>
+    <string name="backup_saved">Backup saved</string>
+    <string name="backup_failed">Backup failed</string>
+    <string name="restore_wrong_pass">Wrong passphrase or damaged file</string>
+    <string name="restore_invalid">Not a valid claudeAssist backup</string>
+    <string name="restore_confirm_title">Restore backup?</string>
+    <string name="restore_confirm_msg">This replaces ALL current accounts and their data with %d account(s) from the backup.</string>
+    <string name="restore_action">Restore</string>
+    <string name="restore_done">Backup restored</string>
 </resources>

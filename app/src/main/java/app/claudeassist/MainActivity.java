@@ -22,6 +22,7 @@ import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -31,9 +32,11 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
-import android.os.HandlerThread;
+import android.os.Looper;
 import android.os.Message;
 import android.text.InputType;
+import android.provider.MediaStore;
+import android.util.Base64;
 import android.util.Log;
 import android.view.ContextMenu;
 import android.view.KeyEvent;
@@ -43,6 +46,8 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
+import android.webkit.MimeTypeMap;
 import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -67,9 +72,28 @@ import androidx.webkit.WebViewFeature;
 
 import org.woheller69.freeDroidWarn.FreeDroidWarn;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Set;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -103,6 +127,14 @@ public class MainActivity extends Activity {
 
     private ValueCallback<Uri[]> mUploadMessage;
     private final static int FILE_CHOOSER_REQUEST_CODE = 1;
+    private final static int BACKUP_REQUEST_CODE = 2;
+    private final static int RESTORE_REQUEST_CODE = 3;
+    private final static int STORAGE_PERMISSION_CODE = 101;
+
+    private char[] pendingBackupPassphrase = null;  // chosen before the save dialog opens
+    private Runnable pendingDownload = null;         // retried after storage permission (Android 9 and older)
+    private final Set<String> blobTokens = Collections.synchronizedSet(new HashSet<String>());
+    private final SecureRandom random = new SecureRandom();
 
     @Override
     protected void onPause() {
@@ -303,7 +335,7 @@ public class MainActivity extends Activity {
             public WebResourceResponse shouldInterceptRequest(final WebView view, WebResourceRequest request) {
                 if (!restricted) return null;
 
-                if (request.getUrl().toString().equals("about:blank")) {
+                if (request.getUrl().toString().equals("about:blank") || isAllowedBlob(request.getUrl().toString())) {
                     return null;
                 }
                 if (!request.getUrl().toString().startsWith("https://")) {
@@ -332,7 +364,7 @@ public class MainActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (!restricted) return false;
 
-                if (request.getUrl().toString().equals("about:blank")) {
+                if (request.getUrl().toString().equals("about:blank") || isAllowedBlob(request.getUrl().toString())) {
                     return false;
                 }
                 if (!request.getUrl().toString().startsWith("https://")) {
@@ -356,23 +388,9 @@ public class MainActivity extends Activity {
             }
         });
 
-        webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
-            Uri source = Uri.parse(url);
-            Log.d(TAG,"DownloadManager: " + url);
-            DownloadManager.Request request = new DownloadManager.Request(source);
-            request.addRequestHeader("Cookie", cookieManager().getCookie(url));
-            request.addRequestHeader("Accept", "text/html, application/xhtml+xml, *" + "/" + "*");
-            request.addRequestHeader("Accept-Language", "en-US,en;q=0.7,he;q=0.3");
-            request.addRequestHeader("Referer", url);
-            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED); //Notify client once download is completed!
-            String filename = URLUtilCompat.getFilenameFromContentDisposition(contentDisposition);
-            if (filename == null) filename = URLUtilCompat.guessFileName(url, contentDisposition, mimetype);  // only if getFilenameFromContentDisposition does not work and returns null
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename);
-            Toast.makeText(this, getString(R.string.download) + "\n" + filename, Toast.LENGTH_SHORT).show();
-            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-            assert dm != null;
-            dm.enqueue(request);
-        });
+        webView.addJavascriptInterface(new DownloadBridge(), "ClaudeAssistBridge");
+        webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) ->
+                handleDownload(url, userAgent, contentDisposition, mimetype));
 
         //Set more options
         chatWebSettings = webView.getSettings();
@@ -449,12 +467,19 @@ public class MainActivity extends Activity {
     }
 
     private void restoreCookies(int id) {
-        CookieManager cm = CookieManager.getInstance();
-        for (Map.Entry<String, String> e : accounts.loadCookies(id).entrySet()) {
+        applyCookies(CookieManager.getInstance(), accounts.loadCookies(id));
+    }
+
+    /** Writes cookies (url -> "a=b; c=d") into a cookie manager. Only known Claude hosts are accepted. */
+    private void applyCookies(CookieManager cm, Map<String, String> cookiesByUrl) {
+        for (Map.Entry<String, String> e : cookiesByUrl.entrySet()) {
+            boolean known = false;
+            for (String url : COOKIE_SNAPSHOT_URLS) if (url.equals(e.getKey())) known = true;
+            if (!known || e.getValue() == null) continue;
             String host = Uri.parse(e.getKey()).getHost();
             for (String pair : e.getValue().split(";")) {
-                pair = pair.trim();
-                if (pair.isEmpty()) continue;
+                pair = pair.replaceAll("[\\x00-\\x1F\\x7F]", "").trim();
+                if (pair.indexOf('=') <= 0) continue;
                 cm.setCookie(e.getKey(), pair + "; Domain=" + host + "; Path=/; Secure; Max-Age=31536000");
             }
         }
@@ -475,12 +500,7 @@ public class MainActivity extends Activity {
                 .setTitle(R.string.accounts_title)
                 .setItems(labels, (d, which) -> switchAccount(list.get(which).id))
                 .setPositiveButton(R.string.add_account, (d, w) -> promptAddAccount())
-                .setNeutralButton(keepAlive ? R.string.bg_on : R.string.bg_off, (d, w) -> {
-                    keepAlive = !keepAlive;
-                    settings.edit().putBoolean("keep_alive", keepAlive).apply();
-                    updateKeepAliveService();
-                    Toast.makeText(context, keepAlive ? R.string.bg_enabled : R.string.bg_disabled, Toast.LENGTH_SHORT).show();
-                })
+                .setNeutralButton(R.string.more, (d, w) -> showMoreMenu())
                 .setNegativeButton(android.R.string.cancel, null)
                 .create();
         dialog.show();
@@ -607,6 +627,510 @@ public class MainActivity extends Activity {
         accounts.remove(account.id); // also drops saved cookie snapshot
     }
 
+    // ------------------------------------------------------------------ downloads
+
+    private void toastUi(final int resId, final Object... args) {
+        runOnUiThread(() -> Toast.makeText(context, getString(resId, args), Toast.LENGTH_SHORT).show());
+    }
+
+    /** blob: URLs created by claude.ai itself may be fetched by the page. */
+    private boolean isAllowedBlob(String url) {
+        if (!url.startsWith("blob:")) return false;
+        return isAllowedHost(Uri.parse(url.substring(5)).getHost());
+    }
+
+    private void handleDownload(final String url, final String userAgent, final String contentDisposition, final String mimetype) {
+        if (url == null) return;
+        runWithStoragePermission(() -> {
+            try {
+                boolean opaque = url.startsWith("blob:") || url.startsWith("data:");
+                String name = null;
+                if (contentDisposition != null && !contentDisposition.isEmpty()) {
+                    name = URLUtilCompat.getFilenameFromContentDisposition(contentDisposition);
+                }
+                if (name == null) {
+                    if (opaque) {
+                        String ext = mimetype == null ? null : MimeTypeMap.getSingleton().getExtensionFromMimeType(stripMimeParams(mimetype));
+                        name = "claude-download" + (ext != null ? "." + ext : "");
+                    } else {
+                        name = URLUtilCompat.guessFileName(url, contentDisposition, mimetype);
+                    }
+                }
+                final String filename = safeFileName(name);
+                final String mime = resolveMime(filename, mimetype);
+
+                if (url.startsWith("blob:")) {
+                    downloadBlob(url, filename, mime);
+                } else if (url.startsWith("data:")) {
+                    saveDataUrl(url, filename, mime);
+                } else if (url.startsWith("https://") || url.startsWith("http://")) {
+                    downloadHttp(url, userAgent, filename, mime);
+                } else {
+                    Toast.makeText(context, R.string.download_unsupported, Toast.LENGTH_LONG).show();
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Download failed: " + url, e);
+                Toast.makeText(context, R.string.download_failed, Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    /** Android 9 and older need WRITE_EXTERNAL_STORAGE to write into Downloads. */
+    private void runWithStoragePermission(Runnable action) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            pendingDownload = action;
+            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, STORAGE_PERMISSION_CODE);
+            return;
+        }
+        action.run();
+    }
+
+    private void downloadHttp(String url, String userAgent, String filename, String mime) {
+        String cookie = cookieManager().getCookie(url);   // may be null
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            if (dm == null) throw new IllegalStateException("DownloadManager not available");
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            if (cookie != null) request.addRequestHeader("Cookie", cookie);
+            if (userAgent != null && !userAgent.isEmpty()) request.addRequestHeader("User-Agent", userAgent);
+            request.addRequestHeader("Referer", url);
+            request.setTitle(filename);
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename);
+            dm.enqueue(request);
+            Toast.makeText(context, getString(R.string.download) + "\n" + filename, Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            // DownloadManager missing/disabled or refused: download it ourselves
+            Log.w(TAG, "DownloadManager failed, using built-in downloader", e);
+            downloadHttpDirect(url, userAgent, cookie, filename, mime);
+        }
+    }
+
+    /** Own downloader (https only). The cookie is never sent to a different host after a redirect. */
+    private void downloadHttpDirect(final String url, final String userAgent, final String cookie, final String filename, final String mime) {
+        Toast.makeText(context, getString(R.string.download) + "\n" + filename, Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                String origHost = new URL(url).getHost();
+                String current = url;
+                boolean ok = false;
+                for (int hop = 0; hop < 6 && !ok; hop++) {
+                    URL u = new URL(current);
+                    if (!"https".equals(u.getProtocol())) throw new IOException("only https is supported");
+                    conn = (HttpURLConnection) u.openConnection();
+                    conn.setInstanceFollowRedirects(false);
+                    conn.setConnectTimeout(20000);
+                    conn.setReadTimeout(30000);
+                    if (userAgent != null && !userAgent.isEmpty()) conn.setRequestProperty("User-Agent", userAgent);
+                    if (cookie != null && u.getHost().equals(origHost)) conn.setRequestProperty("Cookie", cookie);
+                    int code = conn.getResponseCode();
+                    if (code >= 300 && code < 400) {
+                        String location = conn.getHeaderField("Location");
+                        conn.disconnect();
+                        if (location == null) throw new IOException("redirect without location");
+                        current = new URL(u, location).toString();
+                    } else if (code == 200) {
+                        ok = true;
+                    } else {
+                        throw new IOException("HTTP " + code);
+                    }
+                }
+                if (!ok) throw new IOException("too many redirects");
+                try (InputStream in = conn.getInputStream(); OutputStream out = openDownloadStream(filename, mime)) {
+                    byte[] buf = new byte[16384];
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                }
+                toastUi(R.string.download_saved, filename);
+            } catch (Exception e) {
+                Log.e(TAG, "Direct download failed", e);
+                toastUi(R.string.download_failed);
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }).start();
+    }
+
+    /** Reads a blob: URL inside the page (only the page can) and hands the bytes to the bridge. */
+    private void downloadBlob(String url, String filename, String mime) {
+        byte[] raw = new byte[16];
+        random.nextBytes(raw);
+        StringBuilder token = new StringBuilder();
+        for (byte b : raw) token.append(String.format(Locale.US, "%02x", b));
+        blobTokens.add(token.toString());
+        String js = "(function(){var B=window.ClaudeAssistBridge,T=" + JSONObject.quote(token.toString())
+                + ",F=" + JSONObject.quote(filename) + ",M=" + JSONObject.quote(mime) + ";"
+                + "try{var x=new XMLHttpRequest();x.open('GET'," + JSONObject.quote(url) + ",true);x.responseType='blob';"
+                + "x.onload=function(){var r=new FileReader();"
+                + "r.onloadend=function(){B.save(T,String(r.result),F,(x.response&&x.response.type)||M);};"
+                + "r.readAsDataURL(x.response);};"
+                + "x.onerror=function(){B.fail(T);};x.send();}catch(e){B.fail(T);}})();";
+        chatWebView.evaluateJavascript(js, null);
+        Toast.makeText(context, getString(R.string.download) + "\n" + filename, Toast.LENGTH_SHORT).show();
+    }
+
+    private void saveDataUrl(final String url, final String filename, final String mime) {
+        new Thread(() -> {
+            try {
+                int comma = url.indexOf(',');
+                if (comma < 0) throw new IOException("malformed data URL");
+                boolean base64 = url.substring(0, comma).contains(";base64");
+                String payload = url.substring(comma + 1);
+                byte[] bytes = base64 ? Base64.decode(payload, Base64.DEFAULT) : Uri.decode(payload).getBytes(StandardCharsets.UTF_8);
+                writeToDownloads(filename, mime, bytes);
+                toastUi(R.string.download_saved, filename);
+            } catch (Exception e) {
+                Log.e(TAG, "Saving data URL failed", e);
+                toastUi(R.string.download_failed);
+            }
+        }).start();
+    }
+
+    /**
+     * Receives blob contents from the page. Only calls carrying a one-time token that the app
+     * created for a download are accepted, so other websites cannot write files.
+     */
+    private class DownloadBridge {
+        @JavascriptInterface
+        public void save(String token, String dataUrl, String filename, String mime) {
+            if (token == null || !blobTokens.remove(token) || dataUrl == null) return;
+            try {
+                int comma = dataUrl.indexOf(',');
+                if (comma < 0) throw new IOException("malformed data URL");
+                byte[] bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT);
+                String name = safeFileName(filename);
+                writeToDownloads(name, resolveMime(name, mime), bytes);
+                toastUi(R.string.download_saved, name);
+            } catch (Exception e) {
+                Log.e(TAG, "Saving blob failed", e);
+                toastUi(R.string.download_failed);
+            }
+        }
+
+        @JavascriptInterface
+        public void fail(String token) {
+            if (token != null && blobTokens.remove(token)) toastUi(R.string.download_failed);
+        }
+    }
+
+    private void writeToDownloads(String filename, String mime, byte[] bytes) throws IOException {
+        try (OutputStream out = openDownloadStream(filename, mime)) {
+            out.write(bytes);
+        }
+    }
+
+    private OutputStream openDownloadStream(String filename, String mime) throws IOException {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Downloads.DISPLAY_NAME, filename);
+            values.put(MediaStore.Downloads.MIME_TYPE, mime);
+            values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+            OutputStream out = uri == null ? null : getContentResolver().openOutputStream(uri);
+            if (out == null) throw new IOException("could not create file in Downloads");
+            return out;
+        }
+        File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (!dir.exists() && !dir.mkdirs()) throw new IOException("Downloads folder not available");
+        File file = new File(dir, filename);
+        String base = filename, ext = "";
+        int dot = filename.lastIndexOf('.');
+        if (dot > 0) { base = filename.substring(0, dot); ext = filename.substring(dot); }
+        for (int i = 1; file.exists() && i < 1000; i++) file = new File(dir, base + " (" + i + ")" + ext);
+        return new FileOutputStream(file);
+    }
+
+    private static String stripMimeParams(String mime) {
+        int semi = mime.indexOf(';');
+        return (semi >= 0 ? mime.substring(0, semi) : mime).trim().toLowerCase(Locale.US);
+    }
+
+    private static String resolveMime(String filename, String mime) {
+        if (mime != null && !mime.trim().isEmpty()) {
+            String m = stripMimeParams(mime);
+            if (!m.equals("application/octet-stream") && m.contains("/")) return m;
+        }
+        int dot = filename.lastIndexOf('.');
+        if (dot >= 0 && dot < filename.length() - 1) {
+            String guess = MimeTypeMap.getSingleton().getMimeTypeFromExtension(filename.substring(dot + 1).toLowerCase(Locale.US));
+            if (guess != null) return guess;
+        }
+        return "application/octet-stream";
+    }
+
+    private static String safeFileName(String name) {
+        if (name == null) name = "";
+        name = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
+        while (name.startsWith(".")) name = name.substring(1);
+        if (name.length() > 120) name = name.substring(0, 120);
+        return name.isEmpty() ? "download" : name;
+    }
+
+    // ------------------------------------------------------------------ more menu, backup, restore
+
+    private void showMoreMenu() {
+        String[] items = {
+                getString(keepAlive ? R.string.bg_on : R.string.bg_off),
+                getString(R.string.backup_all),
+                getString(R.string.restore_backup)
+        };
+        new AlertDialog.Builder(this)
+                .setItems(items, (d, which) -> {
+                    if (which == 0) toggleKeepAlive();
+                    else if (which == 1) startBackup();
+                    else startRestore();
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void toggleKeepAlive() {
+        keepAlive = !keepAlive;
+        settings.edit().putBoolean("keep_alive", keepAlive).apply();
+        updateKeepAliveService();
+        Toast.makeText(context, keepAlive ? R.string.bg_enabled : R.string.bg_disabled, Toast.LENGTH_SHORT).show();
+    }
+
+    private void promptPassphrase(int titleRes, int messageRes, final TextCallback callback) {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        input.setSingleLine(true);
+        input.setHint(R.string.passphrase_hint);
+        FrameLayout holder = new FrameLayout(this);
+        int pad = (int) (20 * getResources().getDisplayMetrics().density);
+        holder.setPadding(pad, pad / 2, pad, 0);
+        holder.addView(input);
+        new AlertDialog.Builder(this)
+                .setTitle(titleRes)
+                .setMessage(messageRes)
+                .setView(holder)
+                .setPositiveButton(android.R.string.ok, (d, w) -> callback.onText(input.getText().toString()))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void startBackup() {
+        promptPassphrase(R.string.backup_title, R.string.backup_pass_msg, pass -> {
+            pendingBackupPassphrase = pass.toCharArray();
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("application/octet-stream");
+            intent.putExtra(Intent.EXTRA_TITLE, "claudeassist-backup-"
+                    + new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date()) + ".cabk");
+            startActivityForResult(intent, BACKUP_REQUEST_CODE);
+        });
+    }
+
+    /** Everything that is needed to bring all accounts back: names, restriction flags, session cookies. */
+    private byte[] buildBackup() throws JSONException {
+        if (!multiProfile) snapshotCookies(accounts.currentId());
+        JSONArray array = new JSONArray();
+        List<AccountStore.Account> list = accounts.list();
+        int currentIndex = 0;
+        for (int i = 0; i < list.size(); i++) {
+            AccountStore.Account a = list.get(i);
+            if (a.id == accounts.currentId()) currentIndex = i;
+            Map<String, String> cookies = new LinkedHashMap<>();
+            if (multiProfile) {
+                try {
+                    CookieManager cm = profileFor(a).getCookieManager();
+                    for (String url : COOKIE_SNAPSHOT_URLS) cookies.put(url, cm.getCookie(url));
+                } catch (Exception e) {
+                    Log.w(TAG, "Could not read cookies of " + a.name, e);
+                }
+            } else {
+                cookies = accounts.loadCookies(a.id);
+            }
+            JSONObject cookieJson = new JSONObject();
+            for (Map.Entry<String, String> e : cookies.entrySet()) {
+                if (e.getValue() != null) cookieJson.put(e.getKey(), e.getValue());
+            }
+            JSONObject o = new JSONObject();
+            o.put("name", a.name);
+            o.put("restricted", a.restricted);
+            o.put("cookies", cookieJson);
+            array.put(o);
+        }
+        JSONObject root = new JSONObject();
+        root.put("app", "claudeAssist");
+        root.put("version", 1);
+        root.put("created", new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).format(new Date()));
+        root.put("current", currentIndex);
+        root.put("keepAlive", keepAlive);
+        root.put("accounts", array);
+        return root.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private void writeBackup(final Uri uri) {
+        final char[] pass = pendingBackupPassphrase;
+        pendingBackupPassphrase = null;
+        final byte[] plain;
+        try {
+            plain = buildBackup();
+        } catch (Exception e) {
+            Log.e(TAG, "Backup failed", e);
+            Toast.makeText(context, R.string.backup_failed, Toast.LENGTH_LONG).show();
+            return;
+        }
+        new Thread(() -> {
+            try {
+                byte[] out = (pass != null && pass.length > 0) ? BackupCodec.encrypt(plain, pass) : plain;
+                try (OutputStream os = getContentResolver().openOutputStream(uri, "wt")) {
+                    if (os == null) throw new IOException("cannot open backup file");
+                    os.write(out);
+                }
+                toastUi(R.string.backup_saved);
+            } catch (Exception e) {
+                Log.e(TAG, "Backup failed", e);
+                toastUi(R.string.backup_failed);
+            }
+        }).start();
+    }
+
+    private void startRestore() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, RESTORE_REQUEST_CODE);
+    }
+
+    private void readBackup(final Uri uri) {
+        new Thread(() -> {
+            try (InputStream in = getContentResolver().openInputStream(uri)) {
+                if (in == null) throw new IOException("cannot open file");
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    bytes.write(buf, 0, n);
+                    if (bytes.size() > 20 * 1024 * 1024) throw new IOException("file too large");
+                }
+                final byte[] data = bytes.toByteArray();
+                runOnUiThread(() -> onBackupBytes(data));
+            } catch (Exception e) {
+                Log.e(TAG, "Reading backup failed", e);
+                toastUi(R.string.restore_invalid);
+            }
+        }).start();
+    }
+
+    private void onBackupBytes(final byte[] data) {
+        if (BackupCodec.isEncrypted(data)) {
+            promptPassphrase(R.string.restore_pass_title, R.string.restore_pass_msg, pass -> new Thread(() -> {
+                try {
+                    final byte[] plain = BackupCodec.decrypt(data, pass.toCharArray());
+                    runOnUiThread(() -> confirmRestore(plain));
+                } catch (GeneralSecurityException e) {
+                    toastUi(R.string.restore_wrong_pass);
+                }
+            }).start());
+        } else {
+            confirmRestore(data);
+        }
+    }
+
+    private void confirmRestore(byte[] plain) {
+        final JSONObject root;
+        final int count;
+        try {
+            root = new JSONObject(new String(plain, StandardCharsets.UTF_8));
+            if (!"claudeAssist".equals(root.optString("app"))) throw new JSONException("not a claudeAssist backup");
+            count = root.getJSONArray("accounts").length();
+            if (count == 0) throw new JSONException("no accounts");
+        } catch (JSONException e) {
+            Toast.makeText(context, R.string.restore_invalid, Toast.LENGTH_LONG).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.restore_confirm_title)
+                .setMessage(getString(R.string.restore_confirm_msg, count))
+                .setPositiveButton(R.string.restore_action, (d, w) -> applyRestore(root))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void applyRestore(JSONObject root) {
+        final List<String> names = new ArrayList<>();
+        final List<Boolean> restrictedFlags = new ArrayList<>();
+        final List<Map<String, String>> cookieMaps = new ArrayList<>();
+        final int current;
+        final boolean backupKeepAlive;
+        try {
+            JSONArray array = root.getJSONArray("accounts");
+            for (int i = 0; i < array.length() && i < 50; i++) {
+                JSONObject o = array.getJSONObject(i);
+                String name = o.optString("name", "").trim();
+                if (name.isEmpty()) name = getString(R.string.account_default_name, i + 1);
+                if (name.length() > 60) name = name.substring(0, 60);
+                names.add(name);
+                restrictedFlags.add(o.optBoolean("restricted", false));
+                Map<String, String> map = new LinkedHashMap<>();
+                JSONObject cookies = o.optJSONObject("cookies");
+                if (cookies != null) {
+                    for (String url : COOKIE_SNAPSHOT_URLS) if (cookies.has(url)) map.put(url, cookies.optString(url));
+                }
+                cookieMaps.add(map);
+            }
+            if (names.isEmpty()) throw new JSONException("no accounts");
+            current = root.optInt("current", 0);
+            backupKeepAlive = root.optBoolean("keepAlive", keepAlive);
+        } catch (JSONException e) {
+            Toast.makeText(context, R.string.restore_invalid, Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        List<AccountStore.Account> old = accounts.list();
+        destroyWebView();
+        clearAllAccountData(old, () -> {
+            List<AccountStore.Account> created = accounts.replaceAll(names, restrictedFlags, current);
+            for (int i = 0; i < created.size() && i < cookieMaps.size(); i++) {
+                if (multiProfile) {
+                    try {
+                        applyCookies(profileFor(created.get(i)).getCookieManager(), cookieMaps.get(i));
+                    } catch (Exception e) {
+                        Log.w(TAG, "Could not restore cookies", e);
+                    }
+                } else {
+                    accounts.saveCookies(created.get(i).id, cookieMaps.get(i));
+                }
+            }
+            if (!multiProfile) restoreCookies(accounts.currentId());   // active account goes into the shared jar
+            keepAlive = backupKeepAlive;
+            settings.edit().putBoolean("keep_alive", keepAlive).apply();
+            updateKeepAliveService();
+            createWebView();
+            chatWebView.loadUrl(urlToLoad);
+            Toast.makeText(context, R.string.restore_done, Toast.LENGTH_LONG).show();
+        });
+    }
+
+    /** Wipes cookies and site data of the given accounts, then runs {@code then} on the UI thread. */
+    private void clearAllAccountData(List<AccountStore.Account> list, final Runnable then) {
+        if (multiProfile) {
+            for (AccountStore.Account a : list) {
+                try {
+                    Profile p = profileFor(a);
+                    p.getCookieManager().removeAllCookies(null);
+                    p.getCookieManager().flush();
+                    p.getWebStorage().deleteAllData();
+                } catch (Exception e) {
+                    Log.w(TAG, "Could not clear " + a.name, e);
+                }
+                try {
+                    ProfileStore.getInstance().deleteProfile(a.profileName());
+                } catch (Exception e) {
+                    Log.w(TAG, "Profile still in use, data was cleared instead", e);
+                }
+            }
+            then.run();
+        } else {
+            WebStorage.getInstance().deleteAllData();
+            CookieManager.getInstance().removeAllCookies(ok -> runOnUiThread(then));
+        }
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /** Shown when a sign-in page of Google/Apple/Microsoft is blocked in restricted mode. */
@@ -698,53 +1222,53 @@ public class MainActivity extends Activity {
             }
             mUploadMessage.onReceiveValue(result);
             mUploadMessage = null;
+        } else if (requestCode == BACKUP_REQUEST_CODE) {
+            if (resultCode == Activity.RESULT_OK && intent != null && intent.getData() != null) {
+                writeBackup(intent.getData());
+            } else {
+                pendingBackupPassphrase = null;
+            }
+        } else if (requestCode == RESTORE_REQUEST_CODE) {
+            if (resultCode == Activity.RESULT_OK && intent != null && intent.getData() != null) {
+                readBackup(intent.getData());
+            }
         }
     }
 
     @Override
     public void onCreateContextMenu(ContextMenu menu, View v, ContextMenu.ContextMenuInfo menuInfo) {
         super.onCreateContextMenu(menu, v, menuInfo);
+        if (chatWebView == null) return;
         WebView.HitTestResult result = chatWebView.getHitTestResult();
-        String url = "";
-        if (result.getExtra() != null) {
-            if (result.getType() == IMAGE_TYPE) {
-                url = result.getExtra();
-                Uri source = Uri.parse(url);
-                DownloadManager.Request request = new DownloadManager.Request(source);
-                request.addRequestHeader("Cookie", cookieManager().getCookie(url));
-                request.addRequestHeader("Accept", "text/html, application/xhtml+xml, *" + "/" + "*");
-                request.addRequestHeader("Accept-Language", "en-US,en;q=0.7,he;q=0.3");
-                request.addRequestHeader("Referer", url);
-                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED); //Notify client once download is completed!
-                String filename = URLUtil.guessFileName(url, null, "image/jpeg");
-                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename);
-                Toast.makeText(this, getString(R.string.download) + "\n" + filename, Toast.LENGTH_SHORT).show();
-                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-                assert dm != null;
-                dm.enqueue(request);
-            } else if (result.getType() == SRC_IMAGE_ANCHOR_TYPE || result.getType() == SRC_ANCHOR_TYPE) {
-                if (result.getType() == SRC_IMAGE_ANCHOR_TYPE) {
-                    // Create a background thread that has a Looper
-                    HandlerThread handlerThread = new HandlerThread("HandlerThread");
-                    handlerThread.start();
-                    // Create a handler to execute tasks in the background thread.
-                    Handler backgroundHandler = new Handler(handlerThread.getLooper());
-                    Message msg = backgroundHandler.obtainMessage();
-                    chatWebView.requestFocusNodeHref(msg);
-                    url = (String) msg.getData().get("url");
-                    Toast.makeText(this, "SRC_IMAGE: " + url, Toast.LENGTH_SHORT).show();
-                } else if (result.getType() == SRC_ANCHOR_TYPE) {
-                    url = result.getExtra();
-                    Toast.makeText(this, "SRC_ANCHOR: " + url, Toast.LENGTH_SHORT).show();
+        String extra = result.getExtra();
+        if (extra == null) return;
+        int type = result.getType();
+        if (type == IMAGE_TYPE) {
+            handleDownload(extra, chatWebSettings.getUserAgentString(), null, null);
+        } else if (type == SRC_ANCHOR_TYPE) {
+            handleLinkLongPress(extra);
+        } else if (type == SRC_IMAGE_ANCHOR_TYPE) {
+            // The link target arrives asynchronously, on the main thread
+            Handler handler = new Handler(Looper.getMainLooper()) {
+                @Override
+                public void handleMessage(Message msg) {
+                    String url = msg.getData().getString("url");
+                    if (url != null) handleLinkLongPress(url);
                 }
-                String host = Uri.parse(url).getHost();
-                if (host != null && !isAllowedHost(host)) {  //Copy URLs that are not allowed to open to clipboard
-                    ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                    ClipData clip = ClipData.newPlainText(getString(R.string.app_name), url);
-                    clipboard.setPrimaryClip(clip);
-                    Toast.makeText(this, getString(R.string.url_copied), Toast.LENGTH_SHORT).show();
-                }
-            }
+            };
+            chatWebView.requestFocusNodeHref(handler.obtainMessage());
+        }
+    }
+
+    private void handleLinkLongPress(String url) {
+        if (url == null) return;
+        Toast.makeText(this, url, Toast.LENGTH_SHORT).show();
+        String host = Uri.parse(url).getHost();
+        if (host != null && !isAllowedHost(host)) {  //Copy URLs that are not allowed to open to clipboard
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData clip = ClipData.newPlainText(getString(R.string.app_name), url);
+            clipboard.setPrimaryClip(clip);
+            Toast.makeText(this, getString(R.string.url_copied), Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -779,6 +1303,15 @@ public class MainActivity extends Activity {
                 // Permission granted for file access
             } else {
                 Toast.makeText(context, "Storage permission denied.", Toast.LENGTH_SHORT).show();
+            }
+        }
+        if (requestCode == STORAGE_PERMISSION_CODE) {
+            Runnable retry = pendingDownload;
+            pendingDownload = null;
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (retry != null) retry.run();
+            } else {
+                Toast.makeText(context, R.string.download_need_storage, Toast.LENGTH_LONG).show();
             }
         }
     }

@@ -150,6 +150,24 @@ public class AccountStore {
         return true;
     }
 
+    /**
+     * Replaces every account (used by restore). New ids are issued so old WebView
+     * profiles are never reused. Returns the new accounts in the given order.
+     */
+    public List<Account> replaceAll(List<String> names, List<Boolean> restricted, int currentIndex) {
+        SharedPreferences.Editor editor = prefs.edit();
+        for (Account a : accounts) editor.remove(KEY_COOKIES + a.id);
+        editor.apply();
+        accounts.clear();
+        for (int i = 0; i < names.size(); i++) {
+            accounts.add(new Account(nextId++, names.get(i), restricted.get(i)));
+        }
+        if (accounts.isEmpty()) accounts.add(new Account(nextId++, "Account 1", false));
+        currentId = accounts.get(Math.max(0, Math.min(currentIndex, accounts.size() - 1))).id;
+        persist();
+        return list();
+    }
+
     // ---- cookie snapshots (fallback mode only) ----
 
     public void saveCookies(int id, Map<String, String> cookiesByUrl) {
