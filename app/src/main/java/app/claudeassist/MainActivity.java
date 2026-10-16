@@ -134,6 +134,22 @@ public class MainActivity extends Activity {
     private char[] pendingBackupPassphrase = null;  // chosen before the save dialog opens
     private Runnable pendingDownload = null;         // retried after storage permission (Android 9 and older)
     private final Set<String> blobTokens = Collections.synchronizedSet(new HashSet<String>());
+    /** File names the page asked for via <a download="...">, keyed by the link's URL (blob:, data: or http). */
+    private final Map<String, String> downloadNames = Collections.synchronizedMap(new LinkedHashMap<String, String>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, String> eldest) { return size() > 50; }
+    });
+    private static final String DOWNLOAD_NAME_HOOK =
+            "(function(){if(window.__caHook)return;window.__caHook=1;var B=window.ClaudeAssistBridge;"
+          + "if(!B||!B.name)return;"
+          + "function rec(a){try{if(a&&a.hasAttribute&&a.hasAttribute('download')){var n=a.getAttribute('download');"
+          + "if(n&&a.href)B.name(a.href,n);}}catch(e){}}"
+          + "var oc=HTMLAnchorElement.prototype.click;"
+          + "HTMLAnchorElement.prototype.click=function(){rec(this);return oc.apply(this,arguments);};"
+          + "var od=EventTarget.prototype.dispatchEvent;"
+          + "EventTarget.prototype.dispatchEvent=function(e){if(e&&e.type==='click'&&this instanceof HTMLAnchorElement)rec(this);return od.apply(this,arguments);};"
+          + "document.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest('a[download]'):null;rec(a);},true);"
+          + "})();";
     private final SecureRandom random = new SecureRandom();
 
     @Override
@@ -378,6 +394,16 @@ public class MainActivity extends Activity {
                     return true; //Deny URLs not on ALLOWLIST
                 }
                 return false;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                try {
+                    String host = Uri.parse(url).getHost();
+                    if (host != null && isAllowedHost(host)) view.evaluateJavascript(DOWNLOAD_NAME_HOOK, null);
+                } catch (Exception e) {
+                    Log.w(TAG, "download name hook failed", e);
+                }
             }
 
             @Override
@@ -648,6 +674,7 @@ public class MainActivity extends Activity {
                 if (contentDisposition != null && !contentDisposition.isEmpty()) {
                     name = URLUtilCompat.getFilenameFromContentDisposition(contentDisposition);
                 }
+                if (name == null) name = downloadNames.remove(url);   // from <a download="name.ext">
                 if (name == null) {
                     if (opaque) {
                         String ext = mimetype == null ? null : MimeTypeMap.getSingleton().getExtensionFromMimeType(stripMimeParams(mimetype));
@@ -801,12 +828,22 @@ public class MainActivity extends Activity {
                 if (comma < 0) throw new IOException("malformed data URL");
                 byte[] bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT);
                 String name = safeFileName(filename);
+                if (name.toLowerCase(Locale.US).endsWith(".bin")) {
+                    String ext = sniffExtension(bytes);
+                    if (ext != null) name = name.substring(0, name.length() - 4) + ext;
+                }
                 writeToDownloads(name, resolveMime(name, mime), bytes);
                 toastUi(R.string.download_saved, name);
             } catch (Exception e) {
                 Log.e(TAG, "Saving blob failed", e);
                 toastUi(R.string.download_failed);
             }
+        }
+
+        @JavascriptInterface
+        public void name(String url, String name) {
+            if (url == null || name == null || url.length() > 2048 || name.length() > 255) return;
+            downloadNames.put(url, name);
         }
 
         @JavascriptInterface
@@ -840,6 +877,21 @@ public class MainActivity extends Activity {
         if (dot > 0) { base = filename.substring(0, dot); ext = filename.substring(dot); }
         for (int i = 1; file.exists() && i < 1000; i++) file = new File(dir, base + " (" + i + ")" + ext);
         return new FileOutputStream(file);
+    }
+
+    /** Last resort when no file name is known: guess the extension from the file's first bytes. */
+    private static String sniffExtension(byte[] b) {
+        if (b == null || b.length < 4) return null;
+        if (b[0] == '%' && b[1] == 'P' && b[2] == 'D' && b[3] == 'F') return ".pdf";
+        if ((b[0] & 0xff) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') return ".png";
+        if ((b[0] & 0xff) == 0xFF && (b[1] & 0xff) == 0xD8) return ".jpg";
+        if (b[0] == 'G' && b[1] == 'I' && b[2] == 'F') return ".gif";
+        if (b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F' && b.length > 11 && b[8] == 'W' && b[9] == 'E') return ".webp";
+        if (b[0] == 'P' && b[1] == 'K' && b[2] == 3 && b[3] == 4) return ".zip";   // also docx/xlsx/pptx/apk
+        if ((b[0] & 0xff) == 0x1F && (b[1] & 0xff) == 0x8B) return ".gz";
+        if (b[0] == 'I' && b[1] == 'D' && b[2] == '3') return ".mp3";
+        if (b.length > 8 && b[4] == 'f' && b[5] == 't' && b[6] == 'y' && b[7] == 'p') return ".mp4";
+        return null;
     }
 
     private static String stripMimeParams(String mime) {
