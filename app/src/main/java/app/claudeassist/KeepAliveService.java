@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.util.Log;
 
 /**
  * Foreground service whose only job is to keep the app process (and so the WebView)
@@ -40,10 +41,17 @@ public class KeepAliveService extends Service {
                 .setContentIntent(PendingIntent.getActivity(this, 0, open, piFlags))
                 .setOngoing(true)
                 .build();
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
-        } else {
-            startForeground(NOTIFICATION_ID, notification);
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else {
+                startForeground(NOTIFICATION_ID, notification);
+            }
+        } catch (RuntimeException e) {
+            // e.g. SecurityException if the FOREGROUND_SERVICE_SPECIAL_USE permission is missing from the
+            // installed build. Never crash the app over this: just run without background keep-alive.
+            Log.w("claudeAssist", "Keep-alive service could not start", e);
+            stopSelf();
         }
         return START_NOT_STICKY;
     }
